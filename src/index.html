@@ -15,18 +15,7 @@
         <div id="connection-pill" class="connection-pill offline"><span></span><b>未连接</b></div>
       </header>
       <main>
-        <section id="setup-card" class="card setup-card">
-          <div class="section-heading"><div><p class="eyebrow">首次连接</p><h2>连接到飞牛服务器</h2></div></div>
-          <p class="muted">优先尝试内网地址；不可用时自动切换到外网地址。配对码由飞牛管理页生成，10 分钟内有效。</p>
-          <form id="pair-form" class="form-grid">
-            <label><span>内网地址</span><input id="pair-lan-url" type="url" placeholder="http://192.168.1.10:18990" /></label>
-            <label><span>外网地址（可选）</span><input id="pair-wan-url" type="url" placeholder="https://你的域名" /></label>
-            <label><span>电脑名称</span><input id="pair-device-name" required /></label>
-            <label><span>配对码</span><input id="pair-code" required autocomplete="one-time-code" placeholder="输入飞牛管理页生成的配对码" /></label>
-            <button class="primary full" type="submit">连接这台电脑</button>
-          </form>
-        </section>
-        <section id="workspace" class="workspace hidden">
+        <section id="workspace" class="workspace">
           <div class="hero card">
             <div><p class="eyebrow">当前设备</p><h2 id="device-title">Windows PC</h2><p id="route-summary" class="muted">正在检查连接…</p></div>
             <div class="hero-actions"><button id="sync-button" class="secondary">立即同步</button><button id="settings-button" class="ghost">设置</button></div>
@@ -53,11 +42,12 @@
           <label><span>内网地址</span><input id="settings-lan-url" type="url" /></label>
           <label><span>外网地址（可选）</span><input id="settings-wan-url" type="url" /></label>
           <label><span>电脑名称</span><input id="settings-device-name" required /></label>
+          <label><span>10 分钟临时配对码</span><input id="settings-pair-code" autocomplete="one-time-code" placeholder="在飞牛管理页生成" /></label>
           <label class="path-field"><span>接收文件夹</span><div><input id="settings-inbox" required /><button type="button" data-pick="inbox">选择</button></div></label>
           <label class="path-field"><span>发送文件夹</span><div><input id="settings-outbox" required /><button type="button" data-pick="outbox">选择</button></div></label>
           <label class="check"><input id="settings-autostart" type="checkbox" /><span>登录 Windows 时自动启动</span></label>
         </div>
-        <div class="dialog-actions"><button id="disconnect-button" type="button" class="danger">断开配对</button><span></span><button id="cancel-settings" type="button" class="secondary">取消</button><button class="primary" value="default">保存</button></div>
+        <div class="dialog-actions"><button id="pair-button" type="button" class="primary">使用配对码连接</button><button id="disconnect-button" type="button" class="danger">断开配对</button><span></span><button id="cancel-settings" type="button" class="secondary">取消</button><button class="primary" value="default">保存设置</button></div>
       </form>
     </dialog>
     <div id="toast" class="toast" role="status"></div>

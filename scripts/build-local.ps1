@@ -19,7 +19,7 @@ $env:RC = $resourceCompiler
 if ($LASTEXITCODE -ne 0) { throw "Rust 构建失败，退出码 $LASTEXITCODE" }
 
 $outputDirectory = Join-Path $projectRoot 'dist'
-$outputFile = Join-Path $outputDirectory 'OTrans-Rust-v0.1.0.exe'
+$outputFile = Join-Path $outputDirectory 'OTrans-Rust-v0.1.1.exe'
 $builtFile = Join-Path $projectRoot 'src-tauri\target\x86_64-pc-windows-msvc\release\otrans-pc-rust.exe'
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
 Copy-Item -LiteralPath $builtFile -Destination $outputFile -Force

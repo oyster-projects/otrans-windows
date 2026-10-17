@@ -174,7 +174,7 @@ impl AppRuntime {
             PathBuf::from(&store.state.settings.inbox_path)
         };
         tokio::fs::create_dir_all(&inbox).await?;
-        let folder = inbox.join(transfer_folder_name(transfer));
+        let folder = unique_folder(&inbox, &transfer_folder_name(transfer)).await?;
         let temporary = inbox.join(format!(".partial-{}", transfer.id));
         let _ = tokio::fs::remove_dir_all(&temporary).await;
         tokio::fs::create_dir_all(&temporary).await?;
@@ -271,10 +271,53 @@ fn unique_name(candidate: &str, used: &mut HashSet<String>) -> String {
 }
 
 fn transfer_folder_name(transfer: &Transfer) -> String {
-    let stamp = transfer.committed_at.as_deref().unwrap_or(&transfer.created_at)
-        .replace(['-', ':'], "").replace('T', "-").chars().take(15).collect::<String>();
-    let title: String = sanitize_file_name(transfer.title.as_deref().unwrap_or("中转内容")).chars().take(60).collect();
-    format!("{stamp}_{title}_{}", transfer.id.chars().take(8).collect::<String>())
+    let timestamp = transfer.committed_at.as_deref().unwrap_or(&transfer.created_at);
+    let stamp = chrono::DateTime::parse_from_rfc3339(timestamp)
+        .map(|value| value.with_timezone(&chrono::Local).format("%Y%m%d-%H%M%S").to_string())
+        .unwrap_or_else(|_| "unknown-time".into());
+    let files = transfer.items.iter().filter(|item| item.kind == "file").collect::<Vec<_>>();
+    let label = if let Some(first) = files.first() {
+        let name = sanitize_file_name(first.name.as_deref().unwrap_or("文件"));
+        let stem = Path::new(&name).file_stem().and_then(|value| value.to_str()).unwrap_or("文件");
+        let mut label = screenshot_label(stem).unwrap_or_else(|| {
+            let prefix = if first.mime_type.as_deref().unwrap_or("").starts_with("image/") { "图片 " } else { "" };
+            format!("{prefix}{stem}")
+        });
+        if transfer.items.len() > 1 { label.push_str(&format!(" 等{}项", transfer.items.len())); }
+        label
+    } else if transfer.items.iter().any(|item| item.kind == "text") {
+        "文本".into()
+    } else {
+        let title = transfer.title.as_deref().unwrap_or("中转内容");
+        if title.starts_with("来自") {
+            title.split_once(['：', ':']).map(|(_, value)| value).unwrap_or("中转内容").into()
+        } else { title.into() }
+    };
+    let concise: String = sanitize_file_name(&label).chars().take(42).collect();
+    format!("{stamp} {concise}")
+}
+
+fn screenshot_label(stem: &str) -> Option<String> {
+    let lower = stem.to_ascii_lowercase();
+    let remainder = ["screenshot", "screen_capture", "screencapture", "截图"].iter()
+        .find_map(|prefix| lower.strip_prefix(prefix)).map(|value| value.trim_start_matches(['_', '-', ' ']))?;
+    let bytes = remainder.as_bytes();
+    if bytes.len() < 15 || !bytes[..8].iter().all(u8::is_ascii_digit) || !matches!(bytes[8], b'_' | b'-')
+        || !bytes[9..15].iter().all(u8::is_ascii_digit) { return None; }
+    Some(format!("截图 {}-{}", &remainder[..8], &remainder[9..15]))
+}
+
+async fn unique_folder(inbox: &Path, base_name: &str) -> Result<PathBuf> {
+    for suffix in 1..1000 {
+        let name = if suffix == 1 { base_name.to_string() } else { format!("{base_name} ({suffix})") };
+        let candidate = inbox.join(name);
+        match tokio::fs::metadata(&candidate).await {
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(candidate),
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(anyhow!("无法为接收内容分配目录名称"))
 }
 
 fn is_inside(root: &Path, candidate: &Path) -> bool {
@@ -285,4 +328,23 @@ fn file_signature(metadata: &std::fs::Metadata) -> String {
     let modified = metadata.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|duration| duration.as_millis()).unwrap_or(0);
     format!("{}:{modified}", metadata.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concise_screenshot_folder_drops_device_prefix_and_id() {
+        let transfer = Transfer {
+            id: "af547b85-rest".into(), source_device_id: "phone".into(),
+            title: Some("来自 HarmonyOS：screenshot_20261017_124314_com.example".into()),
+            status: "committed".into(), created_at: "2026-10-17T04:43:42Z".into(),
+            committed_at: Some("2026-10-17T04:43:42Z".into()),
+            items: vec![TransferItem { id: None, kind: "file".into(), text: None,
+                name: Some("screenshot_20261017_124314_com.example.png".into()), mime_type: Some("image/png".into()),
+                size: Some(1), sha256: Some("0".repeat(64)) }],
+        };
+        assert_eq!(transfer_folder_name(&transfer), "20261017-124342 截图 20261017-124314");
+    }
 }

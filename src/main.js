@@ -21,7 +21,7 @@ async function call(command, args = {}) {
 }
 function routeText(state) {
   const c = state.connection;
-  if (!state.paired) return "未配对";
+  if (!state.paired) return "尚未配对，请在设置中连接飞牛";
   const route = c.activeRoute === "lan" ? "内网" : c.activeRoute === "wan" ? "外网" : "离线";
   const realtime = c.realtimeStatus === "connected" ? "实时已连接" : c.realtimeStatus === "connecting" ? "实时连接中" : "实时未连接";
   const peer = state.settings.lanPeerEnabled ? ` · ${c.lanPeerDetail || "局域网直传等待中"}` : "";
@@ -29,19 +29,19 @@ function routeText(state) {
 }
 function render(state) {
   appState = state;
-  $("#setup-card").classList.toggle("hidden", state.paired);
-  $("#workspace").classList.toggle("hidden", !state.paired);
   const pill = $("#connection-pill");
   pill.className = `connection-pill ${state.connection.activeRoute || "offline"}`;
   pill.querySelector("b").textContent = state.paired ? (state.connection.activeRoute === "lan" ? "内网" : state.connection.activeRoute === "wan" ? "外网" : "离线") : "未连接";
   $("#device-title").textContent = state.settings.deviceName;
   $("#route-summary").textContent = routeText(state);
   $("#inbox-path").textContent = state.settings.inboxPath;
-  $("#sync-button").disabled = state.syncing;
+  $("#sync-button").disabled = state.syncing || !state.paired;
   $("#sync-button").textContent = state.syncing ? "同步中…" : "立即同步";
-  $("#pair-lan-url").value = state.settings.lanServerUrl;
-  $("#pair-wan-url").value = state.settings.wanServerUrl;
-  $("#pair-device-name").value = state.settings.deviceName;
+  $("#clipboard-button").disabled = !state.paired;
+  $("#choose-files-button").disabled = !state.paired;
+  $("#pair-button").disabled = state.paired;
+  $("#disconnect-button").disabled = !state.paired;
+  renderDraft();
   const activity = state.activity || [];
   $("#activity-list").innerHTML = activity.length ? activity.map((item) => `<div class="activity ${escapeHtml(item.kind)}"><i class="activity-dot"></i><p>${escapeHtml(item.message)}</p><time>${escapeHtml(formatTime(item.at))}</time></div>`).join("") : '<p class="muted">暂无传送记录</p>';
 }
@@ -60,7 +60,7 @@ function addPaths(paths) {
 function renderDraft() {
   const text = $("#draft-text").value.trim();
   $("#draft-count").textContent = draftPaths.length ? `${draftPaths.length} 个附件${text ? " + 文字" : ""}` : (text ? "仅文字" : "暂无附件");
-  $("#send-button").disabled = sending || (!text && draftPaths.length === 0);
+  $("#send-button").disabled = sending || appState?.paired === false || (!text && draftPaths.length === 0);
   $("#send-button").textContent = sending ? "正在上传…" : "发送到中转站";
   $("#draft-files").innerHTML = draftPaths.map((path, index) => `<div class="file-chip"><span class="file-icon">${escapeHtml((fileName(path).split('.').pop() || 'FILE').slice(0,4).toUpperCase())}</span><div><strong title="${escapeHtml(path)}">${escapeHtml(fileName(path))}</strong><small>${escapeHtml(path)}</small></div><button data-remove="${index}" title="移除">×</button></div>`).join("");
 }
@@ -72,6 +72,7 @@ function fillSettings() {
   $("#settings-inbox").value = s.inboxPath;
   $("#settings-outbox").value = s.outboxPath;
   $("#settings-autostart").checked = s.startAtLogin;
+  $("#settings-pair-code").value = "";
 }
 async function initializeDragDrop() {
   const zone = $("#drop-zone");
@@ -112,10 +113,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     try { render(await call("send_draft", { input: { text: $("#draft-text").value, paths: draftPaths } })); draftPaths=[]; $("#draft-text").value=""; toast("已发送到中转站"); }
     finally { sending=false; renderDraft(); }
   });
-  $("#pair-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    render(await call("pair", { input: { lanServerUrl: $("#pair-lan-url").value, wanServerUrl: $("#pair-wan-url").value, deviceName: $("#pair-device-name").value, pairCode: $("#pair-code").value } }));
-    $("#pair-code").value=""; toast("配对成功");
+  $("#pair-button").addEventListener("click", async () => {
+    render(await call("pair", { input: { lanServerUrl: $("#settings-lan-url").value, wanServerUrl: $("#settings-wan-url").value, deviceName: $("#settings-device-name").value, pairCode: $("#settings-pair-code").value } }));
+    $("#settings-pair-code").value=""; $("#settings-dialog").close(); toast("配对成功");
   });
   $("#sync-button").addEventListener("click", async () => { render(await call("sync_now")); toast("同步完成"); });
   $("#open-inbox-button").addEventListener("click", () => call("open_path", { path: appState.settings.inboxPath }));
