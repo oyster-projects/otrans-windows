@@ -58,6 +58,7 @@ impl StateStore {
                     .to_string_lossy()
                     .into_owned(),
                 start_at_login: false,
+                lan_peer_enabled: false,
             },
             sync: SyncState::default(),
             connection: ConnectionState {

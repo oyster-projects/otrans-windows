@@ -24,7 +24,11 @@ function routeText(state) {
   if (!state.paired) return "尚未配对，请在设置中连接飞牛";
   const route = c.activeRoute === "lan" ? "内网" : c.activeRoute === "wan" ? "外网" : "离线";
   const realtime = c.realtimeStatus === "connected" ? "实时已连接" : c.realtimeStatus === "connecting" ? "实时连接中" : "实时未连接";
-  return `${route} · ${realtime}`;
+  let peer = "局域网直传未启用";
+  if (state.settings.lanPeerEnabled) {
+    peer = c.lanPeerStatus === "ready" ? `局域网直传已就绪:${c.lanPeerPort}` : (c.lanPeerDetail || "局域网直传启动中");
+  }
+  return `${route} · ${realtime} · ${peer}`;
 }
 function render(state) {
   appState = state;
@@ -34,6 +38,7 @@ function render(state) {
   $("#device-title").textContent = state.settings.deviceName;
   $("#route-summary").textContent = routeText(state);
   $("#inbox-path").textContent = state.settings.inboxPath;
+  $("#outbox-path").textContent = state.settings.outboxPath;
   $("#sync-button").disabled = state.syncing || !state.paired;
   $("#sync-button").textContent = state.syncing ? "同步中…" : "立即同步";
   $("#clipboard-button").disabled = !state.paired;
@@ -69,8 +74,22 @@ function fillSettings() {
   $("#settings-wan-url").value = s.wanServerUrl;
   $("#settings-device-name").value = s.deviceName;
   $("#settings-inbox").value = s.inboxPath;
+  $("#settings-outbox").value = s.outboxPath;
+  $("#settings-lan-peer").checked = s.lanPeerEnabled;
   $("#settings-autostart").checked = s.startAtLogin;
+  $("#settings-peer-detail").textContent = appState.connection.lanPeerDetail || "动态端口仅供同一局域网设备访问，不需要映射到公网。";
   $("#settings-pair-code").value = "";
+}
+function settingsInput() {
+  return {
+    lanServerUrl: $("#settings-lan-url").value,
+    wanServerUrl: $("#settings-wan-url").value,
+    deviceName: $("#settings-device-name").value,
+    inboxPath: $("#settings-inbox").value,
+    outboxPath: $("#settings-outbox").value,
+    startAtLogin: $("#settings-autostart").checked,
+    lanPeerEnabled: $("#settings-lan-peer").checked
+  };
 }
 async function initializeDragDrop() {
   const zone = $("#drop-zone");
@@ -112,21 +131,25 @@ window.addEventListener("DOMContentLoaded", async () => {
     finally { sending=false; renderDraft(); }
   });
   $("#pair-button").addEventListener("click", async () => {
-    render(await call("pair", { input: { lanServerUrl: $("#settings-lan-url").value, wanServerUrl: $("#settings-wan-url").value, deviceName: $("#settings-device-name").value, pairCode: $("#settings-pair-code").value } }));
+    const settings = settingsInput();
+    await call("pair", { input: { lanServerUrl: settings.lanServerUrl, wanServerUrl: settings.wanServerUrl, deviceName: settings.deviceName, pairCode: $("#settings-pair-code").value } });
+    render(await call("save_settings", { input: settings }));
     $("#settings-pair-code").value=""; $("#settings-dialog").close(); toast("配对成功");
   });
   $("#sync-button").addEventListener("click", async () => { render(await call("sync_now")); toast("同步完成"); });
   $("#open-inbox-button").addEventListener("click", () => call("open_path", { path: appState.settings.inboxPath }));
+  $("#open-outbox-button").addEventListener("click", () => call("open_path", { path: appState.settings.outboxPath }));
   $("#settings-button").addEventListener("click", () => { fillSettings(); $("#settings-dialog").showModal(); });
   $("#close-settings").addEventListener("click", () => $("#settings-dialog").close());
   $("#cancel-settings").addEventListener("click", () => $("#settings-dialog").close());
   document.querySelectorAll("[data-pick]").forEach((button) => button.addEventListener("click", async () => {
-    const path = await call("choose_directory", { title: "选择接收文件夹" });
-    if (path) $("#settings-inbox").value = path;
+    const outbox = button.dataset.pick === "outbox";
+    const path = await call("choose_directory", { title: outbox ? "选择自动发送文件夹" : "选择接收文件夹" });
+    if (path) $(outbox ? "#settings-outbox" : "#settings-inbox").value = path;
   }));
   $("#settings-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    render(await call("save_settings", { input: { lanServerUrl: $("#settings-lan-url").value, wanServerUrl: $("#settings-wan-url").value, deviceName: $("#settings-device-name").value, inboxPath: $("#settings-inbox").value, outboxPath: appState.settings.outboxPath, startAtLogin: $("#settings-autostart").checked } }));
+    render(await call("save_settings", { input: settingsInput() }));
     $("#settings-dialog").close(); toast("设置已保存");
   });
   $("#disconnect-button").addEventListener("click", async () => {

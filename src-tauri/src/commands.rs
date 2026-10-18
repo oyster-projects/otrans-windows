@@ -57,6 +57,7 @@ pub async fn save_settings(
             .to_string_lossy()
             .into_owned();
         store.state.settings.start_at_login = input.start_at_login;
+        store.state.settings.lan_peer_enabled = input.lan_peer_enabled;
         store.ensure_directories().map_err(message)?;
         store.save().map_err(message)?;
     }
@@ -65,7 +66,7 @@ pub async fn save_settings(
     } else {
         let _ = app.autolaunch().disable();
     }
-    runtime.restart_realtime(app.clone()).await;
+    runtime.restart_services(app.clone()).await;
     runtime.emit_state(&app).await;
     Ok(runtime.public_state().await)
 }
@@ -115,7 +116,7 @@ pub async fn pair(
         let _ = store.save();
         return Err(message(error));
     }
-    runtime.restart_realtime(app.clone()).await;
+    runtime.restart_services(app.clone()).await;
     runtime.emit_state(&app).await;
     Ok(runtime.public_state().await)
 }
@@ -125,7 +126,7 @@ pub async fn disconnect(
     app: AppHandle,
     runtime: State<'_, AppRuntime>,
 ) -> Result<PublicState, String> {
-    runtime.stop_realtime().await;
+    runtime.stop_services().await;
     {
         let mut store = runtime.store.lock().await;
         store.clear_token().map_err(message)?;
@@ -133,6 +134,9 @@ pub async fn disconnect(
         store.state.connection.active_server_url.clear();
         store.state.connection.active_route = "offline".into();
         store.state.connection.realtime_status = "disconnected".into();
+        store.state.connection.lan_peer_status = "disabled".into();
+        store.state.connection.lan_peer_port = 0;
+        store.state.connection.lan_peer_detail = "局域网直传未启用".into();
         store.add_activity("info", "已断开当前设备配对");
         store.save().map_err(message)?;
     }
@@ -181,6 +185,10 @@ pub async fn send_draft(
         store.save().map_err(message)?;
     }
     runtime.emit_state(&app).await;
+    let port = runtime.store.lock().await.state.connection.lan_peer_port;
+    if port > 0 {
+        runtime.announce_peer(&app, port).await;
+    }
     Ok(runtime.public_state().await)
 }
 

@@ -1,10 +1,12 @@
 mod api;
 mod commands;
 mod endpoint;
+mod lan_peer;
 mod models;
 mod outbound;
 mod state;
 mod sync;
+mod windows_power;
 
 use tauri::{
     Manager, WindowEvent,
@@ -33,11 +35,13 @@ pub fn run() {
             store.ensure_directories()?;
             let runtime = AppRuntime::new(store);
             app.manage(runtime.clone());
+            windows_power::start(app.handle().clone(), runtime.clone());
 
             let open = MenuItem::with_id(app, "open", "打开 OTrans", true, None::<&str>)?;
             let inbox = MenuItem::with_id(app, "inbox", "打开接收文件夹", true, None::<&str>)?;
+            let outbox = MenuItem::with_id(app, "outbox", "打开发送文件夹", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &inbox, &quit])?;
+            let menu = Menu::with_items(app, &[&open, &inbox, &outbox, &quit])?;
             TrayIconBuilder::new()
                 .icon(
                     app.default_window_icon()
@@ -59,6 +63,23 @@ pub fn run() {
                             });
                         }
                     }
+                    "outbox" => {
+                        if let Some(runtime) = app.try_state::<AppRuntime>() {
+                            let runtime = runtime.inner().clone();
+                            tauri::async_runtime::spawn(async move {
+                                let path = runtime
+                                    .store
+                                    .lock()
+                                    .await
+                                    .state
+                                    .settings
+                                    .outbox_path
+                                    .clone();
+                                let _ =
+                                    std::process::Command::new("explorer.exe").arg(path).spawn();
+                            });
+                        }
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -74,7 +95,7 @@ pub fn run() {
             }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                runtime.restart_realtime(handle).await;
+                runtime.restart_services(handle).await;
             });
             Ok(())
         })

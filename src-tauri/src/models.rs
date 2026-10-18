@@ -12,6 +12,8 @@ pub struct Settings {
     pub inbox_path: String,
     pub outbox_path: String,
     pub start_at_login: bool,
+    #[serde(default)]
+    pub lan_peer_enabled: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -168,6 +170,22 @@ pub struct WsTicket {
     pub ticket: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerSourcesResponse {
+    pub sources: Vec<PeerAdvertisement>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerAdvertisement {
+    pub device_id: String,
+    pub device_name: String,
+    pub addresses: Vec<String>,
+    pub ticket: String,
+    pub expires_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorResponse {
@@ -183,6 +201,7 @@ pub struct SaveSettingsInput {
     pub inbox_path: String,
     pub outbox_path: String,
     pub start_at_login: bool,
+    pub lan_peer_enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

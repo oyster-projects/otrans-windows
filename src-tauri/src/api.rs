@@ -6,8 +6,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use url::Url;
 
 use crate::models::{
-    CreateTransferResponse, Device, ErrorResponse, EventPage, PairResponse, ServerInfo, Transfer,
-    WsTicket,
+    CreateTransferResponse, Device, ErrorResponse, EventPage, PairResponse, PeerSourcesResponse,
+    ServerInfo, Transfer, WsTicket,
 };
 
 #[derive(Clone)]
@@ -173,6 +173,52 @@ impl OTransApi {
             .send()
             .await?;
         self.ensure_success(response).await
+    }
+
+    pub async fn announce_peer(&self, addresses: &[String], digests: &[String]) -> Result<()> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            addresses: &'a [String],
+            digests: &'a [String],
+        }
+        let _: serde_json::Value = self
+            .request(
+                Method::POST,
+                "/api/v1/lan/announce",
+                Some(&Body { addresses, digests }),
+                true,
+                Duration::from_secs(10),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn peer_sources(&self, digest: &str) -> Result<PeerSourcesResponse> {
+        self.request(
+            Method::GET,
+            &format!("/api/v1/lan/sources/{digest}"),
+            Option::<&()>::None,
+            true,
+            Duration::from_secs(10),
+        )
+        .await
+    }
+
+    pub async fn redeem_peer_ticket(&self, ticket: &str, digest: &str) -> Result<()> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            ticket: &'a str,
+            digest: &'a str,
+        }
+        let response = self
+            .client
+            .post(format!("{}/api/v1/lan/tickets/redeem", self.server_url))
+            .bearer_auth(&self.token)
+            .json(&Body { ticket, digest })
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await?;
+        self.ensure_success(response).await.map(|_| ())
     }
 
     async fn request<T: DeserializeOwned, B: Serialize + ?Sized>(

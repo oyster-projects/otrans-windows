@@ -87,6 +87,15 @@ pub async fn prepare_files(paths: &[String]) -> Result<Vec<PreparedFile>> {
 }
 
 pub async fn send_draft(api: &OTransApi, text: &str, files: &[PreparedFile]) -> Result<Transfer> {
+    send_draft_with_id(api, text, files, Uuid::new_v4().to_string()).await
+}
+
+pub async fn send_draft_with_id(
+    api: &OTransApi,
+    text: &str,
+    files: &[PreparedFile],
+    client_transfer_id: String,
+) -> Result<Transfer> {
     let text = text.trim();
     let count = files.len() + usize::from(!text.is_empty());
     if count == 0 {
@@ -124,7 +133,7 @@ pub async fn send_draft(api: &OTransApi, text: &str, files: &[PreparedFile]) -> 
     };
     let created = api
         .create_transfer(&CreateBody {
-            client_transfer_id: Uuid::new_v4().to_string(),
+            client_transfer_id,
             title,
             items,
         })

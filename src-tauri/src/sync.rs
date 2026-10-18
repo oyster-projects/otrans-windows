@@ -1,8 +1,8 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::{Result, anyhow};
@@ -10,12 +10,13 @@ use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
-use tokio::sync::Mutex;
+use tokio::{io::AsyncWriteExt, net::TcpListener, sync::Mutex};
 use tokio_tungstenite::connect_async;
 
 use crate::{
-    endpoint,
-    models::{ManagedTransfer, PeerSource, PublicState, Transfer, TransferItem},
+    endpoint, lan_peer,
+    models::{ManagedTransfer, PeerSource, PublicState, SentFile, Transfer, TransferItem},
+    outbound,
     state::StateStore,
 };
 
@@ -23,7 +24,11 @@ use crate::{
 pub struct AppRuntime {
     pub store: Arc<Mutex<StateStore>>,
     pub client: reqwest::Client,
+    peer_client: reqwest::Client,
     realtime: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
+    peer: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
+    maintenance: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
+    outbox_lock: Arc<Mutex<()>>,
 }
 
 impl AppRuntime {
@@ -31,10 +36,19 @@ impl AppRuntime {
         Self {
             store: Arc::new(Mutex::new(store)),
             client: reqwest::Client::builder()
-                .user_agent("OTrans-Rust/0.1")
+                .user_agent("OTrans-Rust/0.2")
                 .build()
                 .expect("HTTP client"),
+            peer_client: reqwest::Client::builder()
+                .user_agent("OTrans-Rust/0.2 LAN peer")
+                .connect_timeout(Duration::from_millis(1800))
+                .timeout(Duration::from_secs(180))
+                .build()
+                .expect("peer HTTP client"),
             realtime: Arc::new(Mutex::new(None)),
+            peer: Arc::new(Mutex::new(None)),
+            maintenance: Arc::new(Mutex::new(None)),
+            outbox_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -44,6 +58,195 @@ impl AppRuntime {
 
     pub async fn emit_state(&self, app: &AppHandle) {
         let _ = app.emit("state-changed", self.public_state().await);
+    }
+
+    pub async fn restart_services(&self, app: AppHandle) {
+        self.restart_realtime(app.clone()).await;
+        self.restart_peer(app.clone()).await;
+        self.restart_maintenance(app).await;
+    }
+
+    pub async fn stop_services(&self) {
+        self.stop_realtime().await;
+        if let Some(task) = self.peer.lock().await.take() {
+            task.abort();
+        }
+        if let Some(task) = self.maintenance.lock().await.take() {
+            task.abort();
+        }
+    }
+
+    async fn restart_peer(&self, app: AppHandle) {
+        if let Some(task) = self.peer.lock().await.take() {
+            task.abort();
+        }
+        let (enabled, paired) = {
+            let store = self.store.lock().await;
+            (store.state.settings.lan_peer_enabled, store.public().paired)
+        };
+        if !enabled || !paired {
+            self.set_peer_state(&app, "disabled", 0, "局域网直传未启用")
+                .await;
+            return;
+        }
+        self.set_peer_state(&app, "starting", 0, "正在启动局域网直传…")
+            .await;
+        match TcpListener::bind("0.0.0.0:0").await {
+            Ok(listener) => {
+                let port = listener.local_addr().map(|addr| addr.port()).unwrap_or(0);
+                self.set_peer_state(
+                    &app,
+                    "ready",
+                    port,
+                    &format!("动态端口 {port}，等待局域网设备"),
+                )
+                .await;
+                let runtime = self.clone();
+                *self.peer.lock().await = Some(tauri::async_runtime::spawn(async move {
+                    lan_peer::run(listener, runtime, app).await;
+                }));
+            }
+            Err(error) => {
+                self.set_peer_state(&app, "error", 0, &format!("无法监听局域网端口：{error}"))
+                    .await;
+            }
+        }
+    }
+
+    async fn restart_maintenance(&self, app: AppHandle) {
+        if let Some(task) = self.maintenance.lock().await.take() {
+            task.abort();
+        }
+        let paired = self.store.lock().await.public().paired;
+        if !paired {
+            return;
+        }
+        let runtime = self.clone();
+        *self.maintenance.lock().await = Some(tauri::async_runtime::spawn(async move {
+            runtime.maintenance_loop(app).await;
+        }));
+    }
+
+    async fn maintenance_loop(&self, app: AppHandle) {
+        let mut tick = tokio::time::interval(Duration::from_secs(3));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut last_tick = Instant::now();
+        let mut last_route_check = Instant::now();
+        let mut last_safety_sync = Instant::now();
+        loop {
+            tick.tick().await;
+            let elapsed = last_tick.elapsed();
+            last_tick = Instant::now();
+            if elapsed > Duration::from_secs(15) {
+                {
+                    let mut store = self.store.lock().await;
+                    store.add_activity("info", "检测到系统恢复，正在重连服务");
+                }
+                self.restart_realtime(app.clone()).await;
+                let port = self.store.lock().await.state.connection.lan_peer_port;
+                if port > 0 {
+                    self.announce_peer(&app, port).await;
+                }
+            }
+            if let Err(error) = self.scan_outbox(&app).await {
+                let mut store = self.store.lock().await;
+                let message = format!("Outbox 自动发送失败：{error}");
+                if store.state.status != message {
+                    store.state.status.clone_from(&message);
+                    store.add_activity("error", message);
+                }
+            }
+            if last_route_check.elapsed() >= Duration::from_secs(60) {
+                last_route_check = Instant::now();
+                let before = self
+                    .store
+                    .lock()
+                    .await
+                    .state
+                    .connection
+                    .active_server_url
+                    .clone();
+                let changed = endpoint::resolve(&self.store, &self.client, true)
+                    .await
+                    .is_ok_and(|resolved| resolved.api.server_url != before);
+                if changed {
+                    self.restart_realtime(app.clone()).await;
+                }
+            }
+            if last_safety_sync.elapsed() >= Duration::from_secs(600) {
+                last_safety_sync = Instant::now();
+                let _ = self.sync_once(&app, false).await;
+            }
+        }
+    }
+
+    pub async fn set_peer_state(&self, app: &AppHandle, status: &str, port: u16, detail: &str) {
+        let mut store = self.store.lock().await;
+        store.state.connection.lan_peer_status = status.into();
+        store.state.connection.lan_peer_port = port;
+        store.state.connection.lan_peer_detail = detail.into();
+        let _ = store.save();
+        drop(store);
+        self.emit_state(app).await;
+    }
+
+    pub async fn remove_peer_source(&self, digest: &str) {
+        let mut store = self.store.lock().await;
+        if store.state.sync.peer_sources.remove(digest).is_some() {
+            let _ = store.save();
+        }
+    }
+
+    pub async fn announce_peer(&self, app: &AppHandle, port: u16) {
+        let addresses = lan_peer::private_ipv4_addresses(port);
+        if addresses.is_empty() {
+            self.set_peer_state(app, "no-address", port, "没有可登记的私网 IPv4 地址")
+                .await;
+            return;
+        }
+        let sources = self.valid_peer_sources().await;
+        let digests = sources.keys().take(512).cloned().collect::<Vec<_>>();
+        let result = match endpoint::resolve(&self.store, &self.client, true).await {
+            Ok(endpoint) => endpoint.api.announce_peer(&addresses, &digests).await,
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(()) => {
+                self.set_peer_state(
+                    app,
+                    "ready",
+                    port,
+                    &format!("已登记 {} 个文件，动态端口 {port}", digests.len()),
+                )
+                .await;
+            }
+            Err(error) => {
+                self.set_peer_state(app, "offline", port, &format!("等待飞牛登记：{error}"))
+                    .await;
+            }
+        }
+    }
+
+    async fn valid_peer_sources(&self) -> HashMap<String, PeerSource> {
+        let current = self.store.lock().await.state.sync.peer_sources.clone();
+        let mut valid = HashMap::new();
+        for (digest, source) in current {
+            let Ok(metadata) = tokio::fs::metadata(&source.path).await else {
+                continue;
+            };
+            if metadata.is_file()
+                && metadata.len() == source.size
+                && lan_peer::metadata_signature(&metadata) == source.signature
+            {
+                valid.insert(digest, source);
+            }
+        }
+        let mut store = self.store.lock().await;
+        if store.state.sync.peer_sources.len() != valid.len() {
+            store.state.sync.peer_sources.clone_from(&valid);
+            let _ = store.save();
+        }
+        valid
     }
 
     pub async fn restart_realtime(&self, app: AppHandle) {
@@ -139,14 +342,14 @@ impl AppRuntime {
         let mut store = self.store.lock().await;
         store.syncing = false;
         match &result {
-            Ok((received, deleted)) => {
-                let summary = if *received > 0 || *deleted > 0 {
-                    format!("同步完成：接收 {received} 条，删除 {deleted} 条")
+            Ok((sent, received, deleted)) => {
+                let summary = if *sent > 0 || *received > 0 || *deleted > 0 {
+                    format!("同步完成：发送 {sent} 条，接收 {received} 条，删除 {deleted} 条")
                 } else {
                     "已是最新状态".into()
                 };
                 store.state.status.clone_from(&summary);
-                if manual || *received > 0 || *deleted > 0 {
+                if manual || *sent > 0 || *received > 0 || *deleted > 0 {
                     store.add_activity("success", summary);
                 }
             }
@@ -161,7 +364,17 @@ impl AppRuntime {
         result.map(|_| ())
     }
 
-    async fn sync_pass(&self, app: &AppHandle) -> Result<(usize, usize)> {
+    async fn sync_pass(&self, app: &AppHandle) -> Result<(usize, usize, usize)> {
+        let sent = match self.scan_outbox(app).await {
+            Ok(sent) => sent,
+            Err(error) => {
+                let mut store = self.store.lock().await;
+                store.add_activity("error", format!("Outbox 自动发送失败：{error}"));
+                drop(store);
+                self.emit_state(app).await;
+                0
+            }
+        };
         let endpoint = endpoint::resolve(&self.store, &self.client, true).await?;
         let device = endpoint.api.device().await?;
         {
@@ -201,7 +414,135 @@ impl AppRuntime {
             store.state.sync.cursor = cursor;
             store.save()?;
         }
-        Ok((received, deleted))
+        Ok((sent, received, deleted))
+    }
+
+    async fn scan_outbox(&self, app: &AppHandle) -> Result<usize> {
+        let _guard = self.outbox_lock.lock().await;
+        let (outbox, sent_files, paired) = {
+            let store = self.store.lock().await;
+            (
+                PathBuf::from(&store.state.settings.outbox_path),
+                store.state.sync.sent_files.clone(),
+                store.public().paired,
+            )
+        };
+        if !paired {
+            return Ok(0);
+        }
+        tokio::fs::create_dir_all(&outbox).await?;
+        let mut directory = tokio::fs::read_dir(&outbox).await?;
+        let mut existing = HashSet::new();
+        let mut candidates = Vec::new();
+        while let Some(entry) = directory.next_entry().await? {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let metadata = entry.metadata().await?;
+            if !metadata.is_file() {
+                continue;
+            }
+            let canonical = tokio::fs::canonicalize(&path).await?;
+            let key = canonical.to_string_lossy().into_owned();
+            existing.insert(key.clone());
+            let stable = metadata
+                .modified()
+                .ok()
+                .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+                .is_some_and(|age| age >= Duration::from_secs(2));
+            if !stable {
+                continue;
+            }
+            let signature = lan_peer::metadata_signature(&metadata);
+            if sent_files
+                .get(&key)
+                .is_some_and(|record| record.signature == signature)
+            {
+                continue;
+            }
+            if candidates.len() < 64 {
+                candidates.push((key, signature));
+            }
+        }
+        {
+            let mut store = self.store.lock().await;
+            let before = store.state.sync.sent_files.len();
+            store
+                .state
+                .sync
+                .sent_files
+                .retain(|path, _| existing.contains(path));
+            if store.state.sync.sent_files.len() != before {
+                store.save()?;
+            }
+        }
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+        candidates.sort_by(|left, right| left.0.cmp(&right.0));
+        let paths = candidates
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        let prepared = outbound::prepare_files(&paths).await?;
+        if prepared.is_empty() {
+            return Ok(0);
+        }
+        let mut client_hash = Sha256::new();
+        for (path, signature) in &candidates {
+            client_hash.update(path.as_bytes());
+            client_hash.update([0]);
+            client_hash.update(signature.as_bytes());
+            client_hash.update([0]);
+        }
+        let client_id = format!("outbox-{:x}", client_hash.finalize());
+        let endpoint = endpoint::resolve(&self.store, &self.client, true).await?;
+        let transfer =
+            outbound::send_draft_with_id(&endpoint.api, "", &prepared, client_id).await?;
+        let signatures = candidates.into_iter().collect::<HashMap<_, _>>();
+        {
+            let mut store = self.store.lock().await;
+            for file in &prepared {
+                let path = file.path.to_string_lossy().into_owned();
+                let signature = signatures.get(&path).cloned().unwrap_or_else(|| {
+                    std::fs::metadata(&file.path)
+                        .map(|metadata| lan_peer::metadata_signature(&metadata))
+                        .unwrap_or_default()
+                });
+                store.state.sync.sent_files.insert(
+                    path.clone(),
+                    SentFile {
+                        signature: signature.clone(),
+                        transfer_id: transfer.id.clone(),
+                    },
+                );
+                store.state.sync.peer_sources.insert(
+                    file.sha256.clone(),
+                    PeerSource {
+                        path,
+                        size: file.size,
+                        signature,
+                        name: file.name.clone(),
+                        mime_type: file.mime_type.clone(),
+                        updated_at: chrono::Utc::now().timestamp_millis(),
+                    },
+                );
+            }
+            store.state.status = format!("Outbox 已自动发送 {} 个文件", prepared.len());
+            store.add_activity(
+                "sent",
+                format!("Outbox 已自动发送 {} 个文件", prepared.len()),
+            );
+            store.save()?;
+        }
+        self.emit_state(app).await;
+        let port = self.store.lock().await.state.connection.lan_peer_port;
+        if port > 0 {
+            self.announce_peer(app, port).await;
+        }
+        Ok(1)
     }
 
     async fn receive_transfer(
@@ -226,6 +567,7 @@ impl AppRuntime {
             let mut text_index = 0usize;
             let mut used = HashSet::new();
             let mut received_files = Vec::new();
+            let mut direct_sources = HashSet::new();
             for item in &transfer.items {
                 if item.kind == "text" {
                     text_index += 1;
@@ -237,8 +579,12 @@ impl AppRuntime {
                         &sanitize_file_name(item.name.as_deref().unwrap_or("未命名文件")),
                         &mut used,
                     );
-                    self.download_file(api, item, &temporary.join(&name))
-                        .await?;
+                    if let Some(device_name) = self
+                        .download_file(api, item, &temporary.join(&name))
+                        .await?
+                    {
+                        direct_sources.insert(device_name);
+                    }
                     received_files.push((item.clone(), name));
                 }
             }
@@ -275,7 +621,17 @@ impl AppRuntime {
                 },
             );
             let title = transfer.title.as_deref().unwrap_or("未命名中转内容");
-            store.add_activity("received", format!("收到：{title}"));
+            if direct_sources.is_empty() {
+                store.add_activity("received", format!("收到：{title}"));
+            } else {
+                store.add_activity(
+                    "received",
+                    format!(
+                        "已从 {} 局域网直传保存：{title}",
+                        direct_sources.into_iter().collect::<Vec<_>>().join("、")
+                    ),
+                );
+            }
             let _ = app
                 .notification()
                 .builder()
@@ -289,6 +645,10 @@ impl AppRuntime {
             let _ = tokio::fs::remove_dir_all(&temporary).await;
         }
         result?;
+        let port = self.store.lock().await.state.connection.lan_peer_port;
+        if port > 0 {
+            self.announce_peer(app, port).await;
+        }
         Ok(true)
     }
 
@@ -297,24 +657,84 @@ impl AppRuntime {
         api: &crate::api::OTransApi,
         item: &TransferItem,
         destination: &Path,
+    ) -> Result<Option<String>> {
+        let digest = item
+            .sha256
+            .as_deref()
+            .ok_or_else(|| anyhow!("文件记录缺少 SHA-256"))?;
+        let name = item.name.as_deref().unwrap_or("file");
+        if self.store.lock().await.state.settings.lan_peer_enabled
+            && let Ok(peers) = api.peer_sources(digest).await
+        {
+            for peer in peers.sources {
+                let _ = (&peer.device_id, &peer.expires_at);
+                for address in &peer.addresses {
+                    let Ok(mut url) = url::Url::parse(address) else {
+                        continue;
+                    };
+                    url.set_path(&format!("/v1/blobs/{digest}"));
+                    url.query_pairs_mut()
+                        .clear()
+                        .append_pair("ticket", &peer.ticket);
+                    let response = self.peer_client.get(url).send().await;
+                    if let Ok(response) = response
+                        && response.status().is_success()
+                        && self
+                            .save_checked_response(response, item, destination)
+                            .await
+                            .is_ok()
+                    {
+                        return Ok(Some(peer.device_name));
+                    }
+                    let _ = tokio::fs::remove_file(part_path(destination)).await;
+                }
+            }
+        }
+        let response = api.get_blob(digest, name).await?;
+        self.save_checked_response(response, item, destination)
+            .await?;
+        Ok(None)
+    }
+
+    async fn save_checked_response(
+        &self,
+        response: reqwest::Response,
+        item: &TransferItem,
+        destination: &Path,
     ) -> Result<()> {
         let digest = item
             .sha256
             .as_deref()
             .ok_or_else(|| anyhow!("文件记录缺少 SHA-256"))?;
         let name = item.name.as_deref().unwrap_or("file");
-        let bytes = api.get_blob(digest, name).await?.bytes().await?;
-        if item
-            .size
-            .is_some_and(|expected| expected != bytes.len() as u64)
-        {
+        let temporary = part_path(destination);
+        let _ = tokio::fs::remove_file(&temporary).await;
+        let mut output = tokio::fs::File::create(&temporary).await?;
+        let mut stream = response.bytes_stream();
+        let mut hash = Sha256::new();
+        let mut size = 0u64;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            size = size.saturating_add(chunk.len() as u64);
+            if item.size.is_some_and(|expected| size > expected) {
+                let _ = tokio::fs::remove_file(&temporary).await;
+                return Err(anyhow!("{name} 文件大小校验失败"));
+            }
+            hash.update(&chunk);
+            output.write_all(&chunk).await?;
+        }
+        output.flush().await?;
+        drop(output);
+        if item.size.is_some_and(|expected| expected != size) {
+            let _ = tokio::fs::remove_file(&temporary).await;
             return Err(anyhow!("{name} 文件大小校验失败"));
         }
-        let actual = format!("{:x}", Sha256::digest(&bytes));
+        let actual = format!("{:x}", hash.finalize());
         if actual != digest.to_lowercase() {
+            let _ = tokio::fs::remove_file(&temporary).await;
             return Err(anyhow!("{name} 完整性校验失败"));
         }
-        tokio::fs::write(destination, bytes).await?;
+        tokio::fs::rename(&temporary, destination).await?;
         Ok(())
     }
 
@@ -514,6 +934,14 @@ async fn unique_folder(inbox: &Path, base_name: &str) -> Result<PathBuf> {
 
 fn is_inside(root: &Path, candidate: &Path) -> bool {
     candidate != root && candidate.strip_prefix(root).is_ok()
+}
+
+fn part_path(destination: &Path) -> PathBuf {
+    let name = destination
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("download");
+    destination.with_file_name(format!(".{name}.part"))
 }
 
 fn file_signature(metadata: &std::fs::Metadata) -> String {
