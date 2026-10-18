@@ -1,6 +1,9 @@
-use std::{collections::HashSet, path::{Path, PathBuf}};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
@@ -47,13 +50,21 @@ pub async fn prepare_files(paths: &[String]) -> Result<Vec<PreparedFile>> {
     let mut prepared = Vec::new();
     for raw in paths {
         let path = PathBuf::from(raw);
-        let canonical = tokio::fs::canonicalize(&path).await
+        let canonical = tokio::fs::canonicalize(&path)
+            .await
             .with_context(|| format!("无法读取 {}", path.display()))?;
-        if !unique.insert(canonical.clone()) { continue; }
+        if !unique.insert(canonical.clone()) {
+            continue;
+        }
         let metadata = tokio::fs::metadata(&canonical).await?;
-        if !metadata.is_file() { continue; }
+        if !metadata.is_file() {
+            continue;
+        }
         if metadata.len() > MAX_FILE_BYTES {
-            return Err(anyhow!("{} 超过单文件 128 MiB 限制", display_name(&canonical)));
+            return Err(anyhow!(
+                "{} 超过单文件 128 MiB 限制",
+                display_name(&canonical)
+            ));
         }
         let before_modified = metadata.modified().ok();
         let digest = sha256_file(&canonical).await?;
@@ -63,7 +74,10 @@ pub async fn prepare_files(paths: &[String]) -> Result<Vec<PreparedFile>> {
         }
         prepared.push(PreparedFile {
             name: display_name(&canonical),
-            mime_type: mime_guess::from_path(&canonical).first_or_octet_stream().essence_str().into(),
+            mime_type: mime_guess::from_path(&canonical)
+                .first_or_octet_stream()
+                .essence_str()
+                .into(),
             size: after.len(),
             sha256: digest,
             path: canonical,
@@ -75,16 +89,32 @@ pub async fn prepare_files(paths: &[String]) -> Result<Vec<PreparedFile>> {
 pub async fn send_draft(api: &OTransApi, text: &str, files: &[PreparedFile]) -> Result<Transfer> {
     let text = text.trim();
     let count = files.len() + usize::from(!text.is_empty());
-    if count == 0 { return Err(anyhow!("请先添加文本、图片或文件")); }
-    if count > 64 { return Err(anyhow!("一条中转记录最多包含 64 项")); }
+    if count == 0 {
+        return Err(anyhow!("请先添加文本、图片或文件"));
+    }
+    if count > 64 {
+        return Err(anyhow!("一条中转记录最多包含 64 项"));
+    }
     let mut items = Vec::with_capacity(count);
     if !text.is_empty() {
-        items.push(CreateItem { kind: "text".into(), text: Some(text.into()), name: None,
-            mime_type: "text/plain".into(), size: None, sha256: None });
+        items.push(CreateItem {
+            kind: "text".into(),
+            text: Some(text.into()),
+            name: None,
+            mime_type: "text/plain".into(),
+            size: None,
+            sha256: None,
+        });
     }
     for file in files {
-        items.push(CreateItem { kind: "file".into(), text: None, name: Some(file.name.clone()),
-            mime_type: file.mime_type.clone(), size: Some(file.size), sha256: Some(file.sha256.clone()) });
+        items.push(CreateItem {
+            kind: "file".into(),
+            text: None,
+            name: Some(file.name.clone()),
+            mime_type: file.mime_type.clone(),
+            size: Some(file.size),
+            sha256: Some(file.sha256.clone()),
+        });
     }
     let title = match (text.is_empty(), files.len()) {
         (false, 0) => "来自 Windows 的文本".into(),
@@ -92,14 +122,19 @@ pub async fn send_draft(api: &OTransApi, text: &str, files: &[PreparedFile]) -> 
         (true, 1) => format!("来自 Windows：{}", files[0].name),
         (true, n) => format!("来自 Windows 的 {n} 个文件"),
     };
-    let created = api.create_transfer(&CreateBody {
-        client_transfer_id: Uuid::new_v4().to_string(), title, items,
-    }).await?;
+    let created = api
+        .create_transfer(&CreateBody {
+            client_transfer_id: Uuid::new_v4().to_string(),
+            title,
+            items,
+        })
+        .await?;
     let missing: HashSet<&str> = created.missing_blobs.iter().map(String::as_str).collect();
     let mut uploaded = HashSet::new();
     for file in files {
         if missing.contains(file.sha256.as_str()) && uploaded.insert(file.sha256.clone()) {
-            api.put_blob(&file.sha256, &file.path, &file.mime_type).await?;
+            api.put_blob(&file.sha256, &file.path, &file.mime_type)
+                .await?;
         }
     }
     api.commit_transfer(&created.transfer.id).await
@@ -111,12 +146,17 @@ pub async fn sha256_file(path: &Path) -> Result<String> {
     let mut buffer = vec![0u8; 1024 * 1024];
     loop {
         let read = file.read(&mut buffer).await?;
-        if read == 0 { break; }
+        if read == 0 {
+            break;
+        }
         hash.update(&buffer[..read]);
     }
     Ok(format!("{:x}", hash.finalize()))
 }
 
 fn display_name(path: &Path) -> String {
-    path.file_name().and_then(|name| name.to_str()).unwrap_or("未命名文件").to_string()
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("未命名文件")
+        .to_string()
 }

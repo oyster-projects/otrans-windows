@@ -19,11 +19,20 @@ pub struct StateStore {
 impl StateStore {
     pub fn load(path: PathBuf) -> Self {
         let defaults = Self::defaults();
-        let state = fs::read_to_string(&path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<PersistedState>(&raw).ok())
+        let backup = path.with_extension("json.bak");
+        let state = [path.as_path(), backup.as_path()]
+            .iter()
+            .find_map(|candidate| {
+                fs::read_to_string(candidate)
+                    .ok()
+                    .and_then(|raw| serde_json::from_str::<PersistedState>(&raw).ok())
+            })
             .unwrap_or(defaults);
-        Self { path, state, syncing: false }
+        Self {
+            path,
+            state,
+            syncing: false,
+        }
     }
 
     pub fn defaults() -> PersistedState {
@@ -34,10 +43,20 @@ impl StateStore {
                 lan_server_url: "http://192.168.1.10:18990".into(),
                 wan_server_url: String::new(),
                 server_id: String::new(),
-                device_name: format!("Windows-{}", std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".into())),
-                inbox_path: documents.join("OTrans").join("Inbox").to_string_lossy().into_owned(),
-                outbox_path: documents.join("OTrans").join("Outbox").to_string_lossy().into_owned(),
-                lan_peer_enabled: false,
+                device_name: format!(
+                    "Windows-{}",
+                    std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".into())
+                ),
+                inbox_path: documents
+                    .join("OTrans")
+                    .join("Inbox")
+                    .to_string_lossy()
+                    .into_owned(),
+                outbox_path: documents
+                    .join("OTrans")
+                    .join("Outbox")
+                    .to_string_lossy()
+                    .into_owned(),
                 start_at_login: false,
             },
             sync: SyncState::default(),
@@ -57,11 +76,24 @@ impl StateStore {
             fs::create_dir_all(parent)?;
         }
         let temporary = self.path.with_extension("json.tmp");
-        fs::write(&temporary, serde_json::to_vec_pretty(&self.state)?)?;
+        let backup = self.path.with_extension("json.bak");
+        let bytes = serde_json::to_vec_pretty(&self.state)?;
+        let mut file = fs::File::create(&temporary)?;
+        use std::io::Write;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
         if self.path.exists() {
-            fs::remove_file(&self.path)?;
+            if backup.exists() {
+                fs::remove_file(&backup)?;
+            }
+            fs::rename(&self.path, &backup)?;
         }
-        fs::rename(&temporary, &self.path)?;
+        if let Err(error) = fs::rename(&temporary, &self.path) {
+            if backup.exists() && !self.path.exists() {
+                let _ = fs::rename(&backup, &self.path);
+            }
+            return Err(error.into());
+        }
         Ok(())
     }
 
@@ -93,10 +125,10 @@ impl StateStore {
 
     pub fn clear_token(&mut self) -> Result<()> {
         let entry = Entry::new(TOKEN_SERVICE, TOKEN_ACCOUNT)?;
-        if let Err(error) = entry.delete_credential() {
-            if !matches!(error, keyring::Error::NoEntry) {
-                return Err(error.into());
-            }
+        if let Err(error) = entry.delete_credential()
+            && !matches!(error, keyring::Error::NoEntry)
+        {
+            return Err(error.into());
         }
         self.state.sync.cursor = 0;
         self.state.sync.device_id.clear();
@@ -105,12 +137,15 @@ impl StateStore {
     }
 
     pub fn add_activity(&mut self, kind: &str, message: impl Into<String>) {
-        self.state.activity.insert(0, Activity {
-            id: Uuid::new_v4().to_string(),
-            kind: kind.into(),
-            message: message.into(),
-            at: Utc::now().to_rfc3339(),
-        });
+        self.state.activity.insert(
+            0,
+            Activity {
+                id: Uuid::new_v4().to_string(),
+                kind: kind.into(),
+                message: message.into(),
+                at: Utc::now().to_rfc3339(),
+            },
+        );
         self.state.activity.truncate(100);
         let _ = self.save();
     }

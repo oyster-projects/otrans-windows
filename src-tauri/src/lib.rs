@@ -6,7 +6,11 @@ mod outbound;
 mod state;
 mod sync;
 
-use tauri::{menu::{Menu, MenuItem}, tray::TrayIconBuilder, Manager, WindowEvent};
+use tauri::{
+    Manager, WindowEvent,
+    menu::{Menu, MenuItem},
+    tray::TrayIconBuilder,
+};
 use tauri_plugin_autostart::MacosLauncher;
 
 use sync::AppRuntime;
@@ -17,7 +21,10 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec!["--hidden"]),
+        ))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -32,7 +39,11 @@ pub fn run() {
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &inbox, &quit])?;
             TrayIconBuilder::new()
-                .icon(app.default_window_icon().cloned().expect("application icon"))
+                .icon(
+                    app.default_window_icon()
+                        .cloned()
+                        .expect("application icon"),
+                )
                 .tooltip("OTrans 中转站")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -41,8 +52,10 @@ pub fn run() {
                         if let Some(runtime) = app.try_state::<AppRuntime>() {
                             let runtime = runtime.inner().clone();
                             tauri::async_runtime::spawn(async move {
-                                let path = runtime.store.lock().await.state.settings.inbox_path.clone();
-                                let _ = std::process::Command::new("explorer.exe").arg(path).spawn();
+                                let path =
+                                    runtime.store.lock().await.state.settings.inbox_path.clone();
+                                let _ =
+                                    std::process::Command::new("explorer.exe").arg(path).spawn();
                             });
                         }
                     }
@@ -56,9 +69,13 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            if !std::env::args().any(|arg| arg == "--hidden") { show_main(app.handle()); }
+            if !std::env::args().any(|arg| arg == "--hidden") {
+                show_main(app.handle());
+            }
             let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move { runtime.restart_realtime(handle).await; });
+            tauri::async_runtime::spawn(async move {
+                runtime.restart_realtime(handle).await;
+            });
             Ok(())
         })
         .on_window_event(|window, event| {

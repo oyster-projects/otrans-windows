@@ -11,7 +11,6 @@ pub struct Settings {
     pub device_name: String,
     pub inbox_path: String,
     pub outbox_path: String,
-    pub lan_peer_enabled: bool,
     pub start_at_login: bool,
 }
 
@@ -183,7 +182,6 @@ pub struct SaveSettingsInput {
     pub device_name: String,
     pub inbox_path: String,
     pub outbox_path: String,
-    pub lan_peer_enabled: bool,
     pub start_at_login: bool,
 }
 
