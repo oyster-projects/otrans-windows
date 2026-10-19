@@ -26,7 +26,8 @@ function routeText(state) {
   const realtime = c.realtimeStatus === "connected" ? "实时已连接" : c.realtimeStatus === "connecting" ? "实时连接中" : "实时未连接";
   let peer = "局域网直传未启用";
   if (state.settings.lanPeerEnabled) {
-    peer = c.lanPeerStatus === "ready" ? `局域网直传已就绪:${c.lanPeerPort}` : (c.lanPeerDetail || "局域网直传启动中");
+    const count = Number(state.lanPeerSourceCount) || 0;
+    peer = c.lanPeerStatus === "ready" ? `直传服务已监听:${c.lanPeerPort}（可提供 ${count} 个文件，非传输结果）` : (c.lanPeerDetail || "局域网直传启动中");
   }
   return `${route} · ${realtime} · ${peer}`;
 }
@@ -47,7 +48,11 @@ function render(state) {
   $("#disconnect-button").disabled = !state.paired;
   renderDraft();
   const activity = state.activity || [];
-  $("#activity-list").innerHTML = activity.length ? activity.map((item) => `<div class="activity ${escapeHtml(item.kind)}"><i class="activity-dot"></i><p>${escapeHtml(item.message)}</p><time>${escapeHtml(formatTime(item.at))}</time></div>`).join("") : '<p class="muted">暂无传送记录</p>';
+  const routeNames = { lan:"局域网直传", nas:"NAS", mixed:"直传 + NAS", text:"纯文本" };
+  $("#activity-list").innerHTML = activity.length ? activity.map((item) => {
+    const route = routeNames[item.route] ? `<span class="route-badge route-${escapeHtml(item.route)}">${routeNames[item.route]}</span>` : "";
+    return `<div class="activity ${escapeHtml(item.kind)}"><i class="activity-dot"></i><p>${route}${escapeHtml(item.message)}</p><time>${escapeHtml(formatTime(item.at))}</time></div>`;
+  }).join("") : '<p class="muted">暂无传送记录</p>';
 }
 function formatTime(value) {
   const date = new Date(value);
@@ -115,6 +120,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   renderDraft();
   await initializeDragDrop();
   await listen("state-changed", ({ payload }) => render(payload));
+  await listen("incoming-transfer", ({ payload }) => toast(`${payload.route} · 收到：${payload.title}`));
   $("#draft-text").addEventListener("input", renderDraft);
   $("#draft-files").addEventListener("click", (event) => { const index = event.target.dataset.remove; if (index !== undefined) { draftPaths.splice(Number(index), 1); renderDraft(); } });
   $("#clear-draft").addEventListener("click", () => { draftPaths = []; $("#draft-text").value = ""; renderDraft(); });
@@ -137,6 +143,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     $("#settings-pair-code").value=""; $("#settings-dialog").close(); toast("配对成功");
   });
   $("#sync-button").addEventListener("click", async () => { render(await call("sync_now")); toast("同步完成"); });
+  $("#test-notification-button").addEventListener("click", async () => toast(await call("test_notification")));
   $("#open-inbox-button").addEventListener("click", () => call("open_path", { path: appState.settings.inboxPath }));
   $("#open-outbox-button").addEventListener("click", () => call("open_path", { path: appState.settings.outboxPath }));
   $("#settings-button").addEventListener("click", () => { fillSettings(); $("#settings-dialog").showModal(); });

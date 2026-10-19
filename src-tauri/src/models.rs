@@ -34,12 +34,16 @@ pub struct Activity {
     pub kind: String,
     pub message: String,
     pub at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedTransfer {
     pub folder: String,
+    #[serde(default)]
+    pub route: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

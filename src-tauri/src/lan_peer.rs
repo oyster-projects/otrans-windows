@@ -50,8 +50,9 @@ pub async fn run(listener: TcpListener, runtime: AppRuntime, app: AppHandle) {
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
                     let runtime = runtime.clone();
+                    let app = app.clone();
                     tauri::async_runtime::spawn(async move {
-                        let _ = handle_connection(stream, runtime).await;
+                        let _ = handle_connection(stream, runtime, app).await;
                     });
                 }
                 Err(error) => {
@@ -63,7 +64,11 @@ pub async fn run(listener: TcpListener, runtime: AppRuntime, app: AppHandle) {
     }
 }
 
-async fn handle_connection(mut stream: TcpStream, runtime: AppRuntime) -> Result<()> {
+async fn handle_connection(
+    mut stream: TcpStream,
+    runtime: AppRuntime,
+    app: AppHandle,
+) -> Result<()> {
     let request = read_request(&mut stream).await?;
     let Some((digest, ticket)) = parse_request(&request) else {
         return send_error(&mut stream, 404, "Not Found").await;
@@ -100,6 +105,15 @@ async fn handle_connection(mut stream: TcpStream, runtime: AppRuntime) -> Result
     stream.write_all(header.as_bytes()).await?;
     tokio::io::copy(&mut file, &mut stream).await?;
     let _ = stream.shutdown().await;
+    {
+        let mut store = runtime.store.lock().await;
+        store.add_activity_with_route(
+            "lan",
+            format!("已向局域网设备直传：{}", source.name),
+            Some("lan"),
+        );
+    }
+    runtime.emit_state(&app).await;
     Ok(())
 }
 

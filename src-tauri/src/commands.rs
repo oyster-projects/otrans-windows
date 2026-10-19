@@ -6,6 +6,7 @@ use std::{
 use anyhow::{Result, anyhow};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_notification::NotificationExt;
 
 use crate::{
     endpoint,
@@ -199,6 +200,17 @@ pub async fn sync_now(
 ) -> Result<PublicState, String> {
     runtime.sync_once(&app, true).await.map_err(message)?;
     Ok(runtime.public_state().await)
+}
+
+#[tauri::command]
+pub fn test_notification(app: AppHandle) -> Result<String, String> {
+    app.notification()
+        .builder()
+        .title("OTrans 通知测试")
+        .body("系统通知通道工作正常")
+        .show()
+        .map_err(message)?;
+    Ok("已请求 Windows 显示通知；便携版不受 Windows 通知支持，请使用安装版验证。".into())
 }
 
 #[tauri::command]

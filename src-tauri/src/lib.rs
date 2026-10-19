@@ -112,6 +112,7 @@ pub fn run() {
             commands::disconnect,
             commands::send_draft,
             commands::sync_now,
+            commands::test_notification,
             commands::choose_files,
             commands::choose_directory,
             commands::open_path,

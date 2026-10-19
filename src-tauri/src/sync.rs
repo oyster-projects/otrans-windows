@@ -20,6 +20,11 @@ use crate::{
     state::StateStore,
 };
 
+struct DownloadOutcome {
+    direct_source: Option<String>,
+    direct_failure: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct AppRuntime {
     pub store: Arc<Mutex<StateStore>>,
@@ -41,6 +46,7 @@ impl AppRuntime {
                 .expect("HTTP client"),
             peer_client: reqwest::Client::builder()
                 .user_agent("OTrans-Rust/0.2 LAN peer")
+                .no_proxy()
                 .connect_timeout(Duration::from_millis(1800))
                 .timeout(Duration::from_secs(180))
                 .build()
@@ -568,6 +574,9 @@ impl AppRuntime {
             let mut used = HashSet::new();
             let mut received_files = Vec::new();
             let mut direct_sources = HashSet::new();
+            let mut direct_failures = Vec::new();
+            let mut file_count = 0usize;
+            let mut direct_file_count = 0usize;
             for item in &transfer.items {
                 if item.kind == "text" {
                     text_index += 1;
@@ -575,15 +584,20 @@ impl AppRuntime {
                     tokio::fs::write(temporary.join(name), item.text.as_deref().unwrap_or(""))
                         .await?;
                 } else if item.kind == "file" {
+                    file_count += 1;
                     let name = unique_name(
                         &sanitize_file_name(item.name.as_deref().unwrap_or("未命名文件")),
                         &mut used,
                     );
-                    if let Some(device_name) = self
+                    let outcome = self
                         .download_file(api, item, &temporary.join(&name))
-                        .await?
-                    {
+                        .await?;
+                    if let Some(device_name) = outcome.direct_source {
+                        direct_file_count += 1;
                         direct_sources.insert(device_name);
+                    }
+                    if let Some(reason) = outcome.direct_failure {
+                        direct_failures.push(reason);
                     }
                     received_files.push((item.clone(), name));
                 }
@@ -618,26 +632,63 @@ impl AppRuntime {
                 transfer.id.clone(),
                 ManagedTransfer {
                     folder: folder.to_string_lossy().into_owned(),
+                    route: if file_count == 0 {
+                        "text"
+                    } else if direct_file_count == file_count {
+                        "lan"
+                    } else if direct_file_count > 0 {
+                        "mixed"
+                    } else {
+                        "nas"
+                    }
+                    .into(),
                 },
             );
             let title = transfer.title.as_deref().unwrap_or("未命名中转内容");
-            if direct_sources.is_empty() {
-                store.add_activity("received", format!("收到：{title}"));
+            let route = if file_count == 0 {
+                "text"
+            } else if direct_file_count == file_count {
+                "lan"
+            } else if direct_file_count > 0 {
+                "mixed"
             } else {
-                store.add_activity(
-                    "received",
-                    format!(
-                        "已从 {} 局域网直传保存：{title}",
-                        direct_sources.into_iter().collect::<Vec<_>>().join("、")
-                    ),
-                );
-            }
-            let _ = app
+                "nas"
+            };
+            let source_names = direct_sources.into_iter().collect::<Vec<_>>().join("、");
+            let message = match route {
+                "lan" => format!("收到：{title} · 来源 {source_names}"),
+                "mixed" => format!(
+                    "收到：{title} · {direct_file_count}/{file_count} 个文件来自 {source_names}"
+                ),
+                "nas" if !direct_failures.is_empty() => {
+                    format!("收到：{title} · 直传回退原因：{}", direct_failures[0])
+                }
+                _ => format!("收到：{title}"),
+            };
+            store.add_activity_with_route("received", message, Some(route));
+            let route_label = match route {
+                "lan" => "局域网直传",
+                "mixed" => "局域网直传 + NAS",
+                "nas" => "经 NAS 下载",
+                _ => "纯文本",
+            };
+            let notification_body = format!("{route_label} · {title}");
+            if let Err(error) = app
                 .notification()
                 .builder()
                 .title("OTrans 收到新内容")
-                .body(title)
-                .show();
+                .body(&notification_body)
+                .show()
+            {
+                store.add_activity("error", format!("Windows 通知发送失败：{error}"));
+            }
+            let _ = app.emit(
+                "incoming-transfer",
+                serde_json::json!({
+                    "title": title,
+                    "route": route_label
+                }),
+            );
             Ok::<(), anyhow::Error>(())
         }
         .await;
@@ -657,43 +708,70 @@ impl AppRuntime {
         api: &crate::api::OTransApi,
         item: &TransferItem,
         destination: &Path,
-    ) -> Result<Option<String>> {
+    ) -> Result<DownloadOutcome> {
         let digest = item
             .sha256
             .as_deref()
             .ok_or_else(|| anyhow!("文件记录缺少 SHA-256"))?;
         let name = item.name.as_deref().unwrap_or("file");
-        if self.store.lock().await.state.settings.lan_peer_enabled
-            && let Ok(peers) = api.peer_sources(digest).await
-        {
-            for peer in peers.sources {
-                let _ = (&peer.device_id, &peer.expires_at);
-                for address in &peer.addresses {
-                    let Ok(mut url) = url::Url::parse(address) else {
-                        continue;
-                    };
-                    url.set_path(&format!("/v1/blobs/{digest}"));
-                    url.query_pairs_mut()
-                        .clear()
-                        .append_pair("ticket", &peer.ticket);
-                    let response = self.peer_client.get(url).send().await;
-                    if let Ok(response) = response
-                        && response.status().is_success()
-                        && self
-                            .save_checked_response(response, item, destination)
-                            .await
-                            .is_ok()
-                    {
-                        return Ok(Some(peer.device_name));
-                    }
-                    let _ = tokio::fs::remove_file(part_path(destination)).await;
+        let lan_enabled = self.store.lock().await.state.settings.lan_peer_enabled;
+        let mut failure = None;
+        if lan_enabled {
+            match api.peer_sources(digest).await {
+                Ok(peers) if peers.sources.is_empty() => {
+                    failure = Some("没有设备登记该文件".into());
                 }
+                Ok(peers) => {
+                    for peer in peers.sources {
+                        let _ = (&peer.device_id, &peer.expires_at);
+                        for address in &peer.addresses {
+                            let Ok(mut url) = url::Url::parse(address) else {
+                                failure = Some("来源设备登记了无效地址".into());
+                                continue;
+                            };
+                            url.set_path(&format!("/v1/blobs/{digest}"));
+                            url.query_pairs_mut()
+                                .clear()
+                                .append_pair("ticket", &peer.ticket);
+                            match self.peer_client.get(url).send().await {
+                                Ok(response) if response.status().is_success() => {
+                                    match self
+                                        .save_checked_response(response, item, destination)
+                                        .await
+                                    {
+                                        Ok(()) => {
+                                            return Ok(DownloadOutcome {
+                                                direct_source: Some(peer.device_name),
+                                                direct_failure: None,
+                                            });
+                                        }
+                                        Err(error) => {
+                                            failure = Some(format!("直传内容校验失败：{error}"));
+                                        }
+                                    }
+                                }
+                                Ok(response) => {
+                                    failure =
+                                        Some(format!("来源设备返回 HTTP {}", response.status()));
+                                }
+                                Err(error) => {
+                                    failure = Some(format!("无法连接来源设备：{error}"));
+                                }
+                            }
+                            let _ = tokio::fs::remove_file(part_path(destination)).await;
+                        }
+                    }
+                }
+                Err(error) => failure = Some(format!("查询直传来源失败：{error}")),
             }
         }
         let response = api.get_blob(digest, name).await?;
         self.save_checked_response(response, item, destination)
             .await?;
-        Ok(None)
+        Ok(DownloadOutcome {
+            direct_source: None,
+            direct_failure: failure,
+        })
     }
 
     async fn save_checked_response(
