@@ -4,6 +4,7 @@ let appState = null;
 let draftPaths = [];
 let toastTimer = null;
 let sending = false;
+let appVersion = "";
 const $ = (selector) => document.querySelector(selector);
 const fileName = (path) => path.split(/[\\/]/).pop() || path;
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"})[char]);
@@ -14,6 +15,18 @@ function toast(message, error = false) {
   element.className = `toast show${error ? " error" : ""}`;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => element.className = "toast", 3200);
+}
+async function loadAppVersion() {
+  try {
+    appVersion = await invoke("get_app_version");
+    $("#app-version").textContent = `v${appVersion}`;
+    $("#about-version").textContent = `版本 v${appVersion}`;
+    document.title = `OTrans v${appVersion}`;
+  } catch (error) {
+    console.warn("Unable to read app version", error);
+    $("#app-version").textContent = "版本未知";
+    $("#about-version").textContent = "版本未知";
+  }
 }
 async function call(command, args = {}) {
   try { return await invoke(command, args); }
@@ -116,6 +129,7 @@ async function initializeDragDrop() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  await loadAppVersion();
   render(await call("get_state"));
   renderDraft();
   await initializeDragDrop();
@@ -144,6 +158,11 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   $("#sync-button").addEventListener("click", async () => { render(await call("sync_now")); toast("同步完成"); });
   $("#test-notification-button").addEventListener("click", async () => toast(await call("test_notification")));
+  $("#about-button").addEventListener("click", () => {
+    $("#settings-dialog").close();
+    $("#about-dialog").showModal();
+  });
+  $("#close-about").addEventListener("click", () => $("#about-dialog").close());
   $("#open-inbox-button").addEventListener("click", () => call("open_path", { path: appState.settings.inboxPath }));
   $("#open-outbox-button").addEventListener("click", () => call("open_path", { path: appState.settings.outboxPath }));
   $("#settings-button").addEventListener("click", () => { fillSettings(); $("#settings-dialog").showModal(); });

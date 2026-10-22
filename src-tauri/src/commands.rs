@@ -25,6 +25,11 @@ pub async fn get_state(runtime: State<'_, AppRuntime>) -> Result<PublicState, St
 }
 
 #[tauri::command]
+pub fn get_app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+#[tauri::command]
 pub async fn save_settings(
     app: AppHandle,
     runtime: State<'_, AppRuntime>,

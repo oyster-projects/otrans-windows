@@ -107,6 +107,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
+            commands::get_app_version,
             commands::save_settings,
             commands::pair,
             commands::disconnect,

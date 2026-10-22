@@ -11,7 +11,7 @@
   <body>
     <div class="shell">
       <header class="topbar">
-        <div class="brand"><div class="logo">O</div><div><h1>OTrans</h1><p>你的私有中转站</p></div></div>
+        <div class="brand"><div class="logo">O</div><div><div class="brand-title"><h1>OTrans</h1><span id="app-version" class="version-badge">v…</span></div><p>你的私有中转站</p></div></div>
         <div id="connection-pill" class="connection-pill offline"><span></span><b>未连接</b></div>
       </header>
       <main>
@@ -49,9 +49,20 @@
           <label class="check"><input id="settings-autostart" type="checkbox" /><span>登录 Windows 时自动启动</span></label>
           <p id="settings-peer-detail" class="peer-detail"></p>
           <button id="test-notification-button" type="button" class="secondary full">测试 Windows 通知</button>
+          <button id="about-button" type="button" class="ghost full about-button">关于 OTrans</button>
         </div>
         <div class="dialog-actions"><button id="pair-button" type="button" class="primary">使用配对码连接</button><button id="disconnect-button" type="button" class="danger">断开配对</button><span></span><button id="cancel-settings" type="button" class="secondary">取消</button><button class="primary" value="default">保存设置</button></div>
       </form>
+    </dialog>
+    <dialog id="about-dialog" class="about-dialog">
+      <div class="about-content">
+        <div class="about-logo">O</div>
+        <h2>OTrans</h2>
+        <p id="about-version" class="about-version">版本 v…</p>
+        <p class="muted">轻量的私有跨设备中转站客户端</p>
+        <div class="about-meta"><span>Rust + Tauri</span><span>同步协议 v3</span><span>Windows x64</span></div>
+        <button id="close-about" type="button" class="primary">关闭</button>
+      </div>
     </dialog>
     <div id="toast" class="toast" role="status"></div>
   </body>
