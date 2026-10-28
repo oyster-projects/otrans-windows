@@ -46,29 +46,6 @@ function routeText(state) {
   }
   return `${route} · ${realtime} · ${peer}`;
 }
-function renderStatus(state) {
-  const connection = state.connection;
-  const route = connection.activeRoute;
-  const routeLabel = route === "lan" ? "内网优先" : route === "wan" ? "外网连接" : "离线";
-  const realtimeLabel = connection.realtimeStatus === "connected" ? "实时在线" : connection.realtimeStatus === "connecting" ? "正在连接" : "未连接";
-  const peerCount = Number(state.lanPeerSourceCount) || 0;
-  let peerLabel = "未启用";
-  let peerDetail = "可随时在设置中开启";
-  if (state.settings.lanPeerEnabled) {
-    peerLabel = connection.lanPeerStatus === "ready" ? "服务就绪" : connection.lanPeerStatus === "error" ? "启动异常" : "正在准备";
-    peerDetail = connection.lanPeerStatus === "ready" ? `${connection.lanPeerPort} 端口 · ${peerCount} 个可直传文件` : (connection.lanPeerDetail || "等待局域网服务启动");
-  }
-  $("#status-route").textContent = state.paired ? routeLabel : "未配对";
-  $("#status-server").textContent = connection.activeServerUrl || "尚未连接服务器";
-  $("#status-server").title = connection.activeServerUrl || "";
-  $("#status-realtime").textContent = realtimeLabel;
-  $("#status-peer").textContent = peerLabel;
-  $("#status-peer-detail").textContent = peerDetail;
-  $("#status-peer-detail").title = peerDetail;
-  $("#status-latest").textContent = state.status || "尚未同步";
-  $("#status-latest").title = state.status || "";
-  $("#status-device-id").textContent = state.deviceId ? `设备 ID · ${state.deviceId.slice(0, 12)}…` : "等待设备配对";
-}
 function renderActivity() {
   const activity = appState?.activity || [];
   const query = activitySearch.trim().toLocaleLowerCase();
@@ -98,12 +75,11 @@ function switchTab(name) {
 function render(state) {
   appState = state;
   const pill = $("#connection-pill");
-  pill.className = `connection-pill ${state.connection.activeRoute || "offline"}`;
-  pill.querySelector("b").textContent = state.paired ? (state.connection.activeRoute === "lan" ? "内网" : state.connection.activeRoute === "wan" ? "外网" : "离线") : "未连接";
-  $("#device-title").textContent = state.settings.deviceName;
-  $("#route-summary").textContent = routeText(state);
-  $("#inbox-path").textContent = state.settings.inboxPath;
-  $("#outbox-path").textContent = state.settings.outboxPath;
+  const route = state.connection.activeRoute;
+  const connecting = state.paired && state.connection.realtimeStatus === "connecting";
+  pill.className = `connection-pill ${connecting ? "connecting" : route || "offline"}`;
+  pill.querySelector("b").textContent = connecting ? "连接中" : state.paired ? (route === "lan" ? "内网已连接" : route === "wan" ? "外网已连接" : "已断开") : "未连接";
+  pill.title = routeText(state);
   $("#sync-button").disabled = state.syncing || !state.paired;
   $("#sync-button").textContent = state.syncing ? "同步中…" : "立即同步";
   $("#clipboard-button").disabled = !state.paired;
@@ -111,7 +87,6 @@ function render(state) {
   $("#pair-button").disabled = state.paired;
   $("#disconnect-button").disabled = !state.paired;
   renderDraft();
-  renderStatus(state);
   renderActivity();
 }
 function formatTime(value) {

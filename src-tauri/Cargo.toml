@@ -1,6 +1,6 @@
 [package]
 name = "otrans-pc-rust"
-version = "0.3.1"
+version = "0.3.2"
 description = "Lightweight OTrans Windows client"
 authors = ["OTrans"]
 edition = "2024"
