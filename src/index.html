@@ -16,21 +16,41 @@
       </header>
       <main>
         <section id="workspace" class="workspace">
-          <div class="hero card">
-            <div><p class="eyebrow">当前设备</p><h2 id="device-title">Windows PC</h2><p id="route-summary" class="muted">正在检查连接…</p></div>
-            <div class="hero-actions"><button id="sync-button" class="secondary">立即同步</button><button id="settings-button" class="ghost">设置</button></div>
-          </div>
+          <section class="hero card">
+            <div class="hero-main">
+              <div><p class="eyebrow">当前设备</p><h2 id="device-title">Windows PC</h2><p id="route-summary" class="muted">正在检查连接…</p></div>
+              <div class="hero-actions"><button id="sync-button" class="secondary">立即同步</button><button id="settings-button" class="ghost">设置</button></div>
+            </div>
+            <div class="status-grid" aria-label="连接状态">
+              <div class="status-item"><span>服务器链路</span><strong id="status-route">离线</strong><small id="status-server">尚未连接</small></div>
+              <div class="status-item"><span>实时通知</span><strong id="status-realtime">未连接</strong><small>休眠恢复后自动重连</small></div>
+              <div class="status-item"><span>局域网直传</span><strong id="status-peer">未启用</strong><small id="status-peer-detail">可随时在设置中开启</small></div>
+              <div class="status-item"><span>最近状态</span><strong id="status-latest">尚未同步</strong><small id="status-device-id">等待设备配对</small></div>
+            </div>
+          </section>
           <section class="card composer">
             <div class="section-heading"><div><p class="eyebrow">发送</p><h2>待发送内容</h2></div><button id="clear-draft" class="text-button">清空</button></div>
             <div id="drop-zone" class="drop-zone" tabindex="0"><div class="drop-icon">＋</div><strong>拖入文件、图片或文字</strong><span>支持多个文件混合发送，也可以使用下面的按钮添加</span></div>
-            <textarea id="draft-text" rows="4" placeholder="输入或粘贴要发送的文字…"></textarea>
+            <textarea id="draft-text" rows="4" placeholder="输入或粘贴要发送的文字…（Ctrl + Enter 发送）"></textarea>
             <div class="composer-actions"><button id="clipboard-button" class="secondary">读取剪切板</button><button id="choose-files-button" class="secondary">选择文件</button><span id="draft-count" class="draft-count">暂无附件</span></div>
             <div id="draft-files" class="draft-files"></div>
             <button id="send-button" class="primary send-button" disabled>发送到中转站</button>
           </section>
           <div class="lower-grid">
             <section class="card"><div class="section-heading"><div><p class="eyebrow">存储</p><h2>同步文件夹</h2></div></div><p class="folder-label">接收 Inbox</p><p id="inbox-path" class="path"></p><button id="open-inbox-button" class="secondary">打开 Inbox</button><p class="folder-label outbox-label">发送 Outbox</p><p id="outbox-path" class="path"></p><button id="open-outbox-button" class="secondary">打开 Outbox</button></section>
-            <section class="card"><div class="section-heading"><div><p class="eyebrow">最近记录</p><h2>传送动态</h2></div></div><div id="activity-list" class="activity-list"><p class="muted">暂无传送记录</p></div></section>
+            <section class="card activity-card">
+              <div class="section-heading"><div><p class="eyebrow">最近记录</p><h2>传送动态 <span id="activity-count" class="heading-count">0</span></h2></div><button id="clear-activity-button" class="text-button" type="button">清空记录</button></div>
+              <div class="activity-toolbar">
+                <div class="filter-group" role="group" aria-label="筛选传送记录">
+                  <button type="button" class="filter-button active" data-activity-filter="all">全部</button>
+                  <button type="button" class="filter-button" data-activity-filter="received">收到</button>
+                  <button type="button" class="filter-button" data-activity-filter="sent">发送</button>
+                  <button type="button" class="filter-button" data-activity-filter="error">异常</button>
+                </div>
+                <input id="activity-search" type="search" placeholder="搜索记录" aria-label="搜索传送记录" />
+              </div>
+              <div id="activity-list" class="activity-list"><p class="muted">暂无传送记录</p></div>
+            </section>
           </div>
         </section>
       </main>
@@ -38,18 +58,24 @@
     <dialog id="settings-dialog">
       <form id="settings-form" method="dialog">
         <div class="dialog-heading"><div><p class="eyebrow">客户端</p><h2>连接与存储设置</h2></div><button id="close-settings" type="button" class="icon-button">×</button></div>
-        <div class="form-grid">
-          <label><span>内网地址</span><input id="settings-lan-url" type="url" /></label>
-          <label><span>外网地址（可选）</span><input id="settings-wan-url" type="url" /></label>
-          <label><span>电脑名称</span><input id="settings-device-name" required /></label>
-          <label><span>10 分钟临时配对码</span><input id="settings-pair-code" autocomplete="one-time-code" placeholder="在飞牛管理页生成" /></label>
-          <label class="path-field"><span>接收文件夹</span><div><input id="settings-inbox" required /><button type="button" data-pick="inbox">选择</button></div></label>
-          <label class="path-field"><span>自动发送文件夹（Outbox）</span><div><input id="settings-outbox" required /><button type="button" data-pick="outbox">选择</button></div></label>
-          <label class="check"><input id="settings-lan-peer" type="checkbox" /><span>启用实验性局域网设备直传</span></label>
-          <label class="check"><input id="settings-autostart" type="checkbox" /><span>登录 Windows 时自动启动</span></label>
-          <p id="settings-peer-detail" class="peer-detail"></p>
-          <button id="test-notification-button" type="button" class="secondary full">测试 Windows 通知</button>
-          <button id="about-button" type="button" class="ghost full about-button">关于 OTrans</button>
+        <div class="settings-stack">
+          <section class="settings-group"><div class="settings-group-title"><strong>服务器与设备</strong><span>优先使用内网地址，失败后自动切换外网</span></div><div class="form-grid">
+            <label><span>内网地址</span><input id="settings-lan-url" type="url" /></label>
+            <label><span>外网地址（可选）</span><input id="settings-wan-url" type="url" /></label>
+            <label><span>电脑名称</span><input id="settings-device-name" required /></label>
+            <label><span>10 分钟临时配对码</span><input id="settings-pair-code" autocomplete="one-time-code" placeholder="在飞牛管理页生成" /></label>
+          </div></section>
+          <section class="settings-group"><div class="settings-group-title"><strong>文件夹</strong><span>Inbox 接收内容，Outbox 中的新文件会自动发送</span></div><div class="form-grid">
+            <label class="path-field"><span>接收文件夹</span><div><input id="settings-inbox" required /><button type="button" data-pick="inbox">选择</button></div></label>
+            <label class="path-field"><span>自动发送文件夹（Outbox）</span><div><input id="settings-outbox" required /><button type="button" data-pick="outbox">选择</button></div></label>
+          </div></section>
+          <section class="settings-group"><div class="settings-group-title"><strong>后台能力</strong><span>控制直传、开机启动和系统通知</span></div><div class="form-grid settings-options">
+            <label class="check"><input id="settings-lan-peer" type="checkbox" /><span>启用实验性局域网设备直传</span></label>
+            <label class="check"><input id="settings-autostart" type="checkbox" /><span>登录 Windows 时自动启动</span></label>
+            <p id="settings-peer-detail" class="peer-detail"></p>
+            <button id="test-notification-button" type="button" class="secondary full">测试 Windows 通知</button>
+            <button id="about-button" type="button" class="ghost full about-button">关于 OTrans</button>
+          </div></section>
         </div>
         <div class="dialog-actions"><button id="pair-button" type="button" class="primary">使用配对码连接</button><button id="disconnect-button" type="button" class="danger">断开配对</button><span></span><button id="cancel-settings" type="button" class="secondary">取消</button><button class="primary" value="default">保存设置</button></div>
       </form>

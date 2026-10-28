@@ -68,6 +68,10 @@ pub async fn save_settings(
         store.save().map_err(message)?;
     }
     if input.start_at_login {
+        // Re-register instead of only enabling. The Windows entry contains the full
+        // executable path, so a portable build with a versioned filename otherwise
+        // keeps launching an older binary after an upgrade.
+        let _ = app.autolaunch().disable();
         app.autolaunch().enable().map_err(message)?;
     } else {
         let _ = app.autolaunch().disable();
@@ -204,6 +208,20 @@ pub async fn sync_now(
     runtime: State<'_, AppRuntime>,
 ) -> Result<PublicState, String> {
     runtime.sync_once(&app, true).await.map_err(message)?;
+    Ok(runtime.public_state().await)
+}
+
+#[tauri::command]
+pub async fn clear_activity(
+    app: AppHandle,
+    runtime: State<'_, AppRuntime>,
+) -> Result<PublicState, String> {
+    {
+        let mut store = runtime.store.lock().await;
+        store.state.activity.clear();
+        store.save().map_err(message)?;
+    }
+    runtime.emit_state(&app).await;
     Ok(runtime.public_state().await)
 }
 

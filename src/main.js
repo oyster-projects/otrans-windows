@@ -5,6 +5,8 @@ let draftPaths = [];
 let toastTimer = null;
 let sending = false;
 let appVersion = "";
+let activityFilter = "all";
+let activitySearch = "";
 const $ = (selector) => document.querySelector(selector);
 const fileName = (path) => path.split(/[\\/]/).pop() || path;
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"})[char]);
@@ -44,6 +46,45 @@ function routeText(state) {
   }
   return `${route} · ${realtime} · ${peer}`;
 }
+function renderStatus(state) {
+  const connection = state.connection;
+  const route = connection.activeRoute;
+  const routeLabel = route === "lan" ? "内网优先" : route === "wan" ? "外网连接" : "离线";
+  const realtimeLabel = connection.realtimeStatus === "connected" ? "实时在线" : connection.realtimeStatus === "connecting" ? "正在连接" : "未连接";
+  const peerCount = Number(state.lanPeerSourceCount) || 0;
+  let peerLabel = "未启用";
+  let peerDetail = "可随时在设置中开启";
+  if (state.settings.lanPeerEnabled) {
+    peerLabel = connection.lanPeerStatus === "ready" ? "服务就绪" : connection.lanPeerStatus === "error" ? "启动异常" : "正在准备";
+    peerDetail = connection.lanPeerStatus === "ready" ? `${connection.lanPeerPort} 端口 · ${peerCount} 个可直传文件` : (connection.lanPeerDetail || "等待局域网服务启动");
+  }
+  $("#status-route").textContent = state.paired ? routeLabel : "未配对";
+  $("#status-server").textContent = connection.activeServerUrl || "尚未连接服务器";
+  $("#status-server").title = connection.activeServerUrl || "";
+  $("#status-realtime").textContent = realtimeLabel;
+  $("#status-peer").textContent = peerLabel;
+  $("#status-peer-detail").textContent = peerDetail;
+  $("#status-peer-detail").title = peerDetail;
+  $("#status-latest").textContent = state.status || "尚未同步";
+  $("#status-latest").title = state.status || "";
+  $("#status-device-id").textContent = state.deviceId ? `设备 ID · ${state.deviceId.slice(0, 12)}…` : "等待设备配对";
+}
+function renderActivity() {
+  const activity = appState?.activity || [];
+  const query = activitySearch.trim().toLocaleLowerCase();
+  const visible = activity.filter((item) => {
+    const matchesType = activityFilter === "all" || item.kind === activityFilter;
+    const matchesQuery = !query || `${item.message} ${item.route || ""}`.toLocaleLowerCase().includes(query);
+    return matchesType && matchesQuery;
+  });
+  const routeNames = { lan:"局域网直传", nas:"NAS", mixed:"直传 + NAS", text:"纯文本" };
+  $("#activity-count").textContent = visible.length === activity.length ? String(activity.length) : `${visible.length}/${activity.length}`;
+  $("#clear-activity-button").disabled = activity.length === 0;
+  $("#activity-list").innerHTML = visible.length ? visible.map((item) => {
+    const route = routeNames[item.route] ? `<span class="route-badge route-${escapeHtml(item.route)}">${routeNames[item.route]}</span>` : "";
+    return `<div class="activity ${escapeHtml(item.kind)}"><i class="activity-dot"></i><p>${route}${escapeHtml(item.message)}</p><time>${escapeHtml(formatTime(item.at))}</time></div>`;
+  }).join("") : `<div class="empty-state"><strong>${activity.length ? "没有符合条件的记录" : "暂无传送记录"}</strong><span>${activity.length ? "尝试调整筛选条件或搜索词" : "发送或收到内容后会显示在这里"}</span></div>`;
+}
 function render(state) {
   appState = state;
   const pill = $("#connection-pill");
@@ -60,12 +101,8 @@ function render(state) {
   $("#pair-button").disabled = state.paired;
   $("#disconnect-button").disabled = !state.paired;
   renderDraft();
-  const activity = state.activity || [];
-  const routeNames = { lan:"局域网直传", nas:"NAS", mixed:"直传 + NAS", text:"纯文本" };
-  $("#activity-list").innerHTML = activity.length ? activity.map((item) => {
-    const route = routeNames[item.route] ? `<span class="route-badge route-${escapeHtml(item.route)}">${routeNames[item.route]}</span>` : "";
-    return `<div class="activity ${escapeHtml(item.kind)}"><i class="activity-dot"></i><p>${route}${escapeHtml(item.message)}</p><time>${escapeHtml(formatTime(item.at))}</time></div>`;
-  }).join("") : '<p class="muted">暂无传送记录</p>';
+  renderStatus(state);
+  renderActivity();
 }
 function formatTime(value) {
   const date = new Date(value);
@@ -136,6 +173,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   await listen("state-changed", ({ payload }) => render(payload));
   await listen("incoming-transfer", ({ payload }) => toast(`${payload.route} · 收到：${payload.title}`));
   $("#draft-text").addEventListener("input", renderDraft);
+  $("#draft-text").addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !$("#send-button").disabled) {
+      event.preventDefault();
+      $("#send-button").click();
+    }
+  });
   $("#draft-files").addEventListener("click", (event) => { const index = event.target.dataset.remove; if (index !== undefined) { draftPaths.splice(Number(index), 1); renderDraft(); } });
   $("#clear-draft").addEventListener("click", () => { draftPaths = []; $("#draft-text").value = ""; renderDraft(); });
   $("#choose-files-button").addEventListener("click", async () => addPaths(await call("choose_files")));
@@ -157,6 +200,17 @@ window.addEventListener("DOMContentLoaded", async () => {
     $("#settings-pair-code").value=""; $("#settings-dialog").close(); toast("配对成功");
   });
   $("#sync-button").addEventListener("click", async () => { render(await call("sync_now")); toast("同步完成"); });
+  document.querySelectorAll("[data-activity-filter]").forEach((button) => button.addEventListener("click", () => {
+    activityFilter = button.dataset.activityFilter;
+    document.querySelectorAll("[data-activity-filter]").forEach((candidate) => candidate.classList.toggle("active", candidate === button));
+    renderActivity();
+  }));
+  $("#activity-search").addEventListener("input", (event) => { activitySearch = event.target.value; renderActivity(); });
+  $("#clear-activity-button").addEventListener("click", async () => {
+    if (!confirm("清空这台电脑上的传送动态？这不会删除中转站内容或已接收文件。")) return;
+    render(await call("clear_activity"));
+    toast("本地传送动态已清空");
+  });
   $("#test-notification-button").addEventListener("click", async () => toast(await call("test_notification")));
   $("#about-button").addEventListener("click", () => {
     $("#settings-dialog").close();

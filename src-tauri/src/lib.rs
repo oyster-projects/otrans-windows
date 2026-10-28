@@ -13,7 +13,7 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
 };
-use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 use sync::AppRuntime;
 
@@ -33,9 +33,16 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             let store = state::StateStore::load(data_dir.join("state.json"));
             store.ensure_directories()?;
+            let start_at_login = store.state.settings.start_at_login;
             let runtime = AppRuntime::new(store);
             app.manage(runtime.clone());
             windows_power::start(app.handle().clone(), runtime.clone());
+
+            // Refresh a versioned portable EXE path left by an older build.
+            let _ = app.autolaunch().disable();
+            if start_at_login {
+                let _ = app.autolaunch().enable();
+            }
 
             let open = MenuItem::with_id(app, "open", "打开 OTrans", true, None::<&str>)?;
             let inbox = MenuItem::with_id(app, "inbox", "打开接收文件夹", true, None::<&str>)?;
@@ -113,6 +120,7 @@ pub fn run() {
             commands::disconnect,
             commands::send_draft,
             commands::sync_now,
+            commands::clear_activity,
             commands::test_notification,
             commands::choose_files,
             commands::choose_directory,
