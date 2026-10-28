@@ -37,3 +37,7 @@ npm run tauri dev
 
 本机没有完整 Visual Studio Build Tools 时，可以运行 `scripts/build-local.ps1`。该脚本使用仓库下 `.toolchain` 中的便携 LLVM 和 cargo-xwin，生成的 EXE 位于 `dist`。
 
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。
+
