@@ -8,12 +8,15 @@ mod state;
 mod sync;
 mod windows_power;
 
+use std::{path::Path, process::Command};
+
 use tauri::{
     Manager, WindowEvent,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_notification::NotificationExt;
 
 use sync::AppRuntime;
 
@@ -37,6 +40,22 @@ pub fn run() {
             let runtime = AppRuntime::new(store);
             app.manage(runtime.clone());
             windows_power::start(app.handle().clone(), runtime.clone());
+
+            app.notification().on_action(|performed| {
+                if performed.action_id() != "tap" {
+                    return;
+                }
+                let Some(path) = performed
+                    .notification()
+                    .and_then(|notification| notification.extra().get("folderPath"))
+                    .and_then(serde_json::Value::as_str)
+                else {
+                    return;
+                };
+                if Path::new(path).is_dir() {
+                    let _ = Command::new("explorer.exe").arg(path).spawn();
+                }
+            })?;
 
             // Refresh a versioned portable EXE path left by an older build.
             let _ = app.autolaunch().disable();

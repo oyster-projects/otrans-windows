@@ -36,6 +36,8 @@ pub struct Activity {
     pub at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

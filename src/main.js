@@ -79,11 +79,21 @@ function renderActivity() {
   });
   const routeNames = { lan:"局域网直传", nas:"NAS", mixed:"直传 + NAS", text:"纯文本" };
   $("#activity-count").textContent = visible.length === activity.length ? String(activity.length) : `${visible.length}/${activity.length}`;
+  $("#activity-tab-count").textContent = String(activity.length);
   $("#clear-activity-button").disabled = activity.length === 0;
   $("#activity-list").innerHTML = visible.length ? visible.map((item) => {
     const route = routeNames[item.route] ? `<span class="route-badge route-${escapeHtml(item.route)}">${routeNames[item.route]}</span>` : "";
-    return `<div class="activity ${escapeHtml(item.kind)}"><i class="activity-dot"></i><p>${route}${escapeHtml(item.message)}</p><time>${escapeHtml(formatTime(item.at))}</time></div>`;
+    const open = item.path ? `<button type="button" class="activity-open" data-open-activity="${escapeHtml(item.id)}">打开</button>` : "";
+    return `<div class="activity ${escapeHtml(item.kind)}"><i class="activity-dot"></i><p>${route}${escapeHtml(item.message)}</p><div class="activity-tail"><time>${escapeHtml(formatTime(item.at))}</time>${open}</div></div>`;
   }).join("") : `<div class="empty-state"><strong>${activity.length ? "没有符合条件的记录" : "暂无传送记录"}</strong><span>${activity.length ? "尝试调整筛选条件或搜索词" : "发送或收到内容后会显示在这里"}</span></div>`;
+}
+function switchTab(name) {
+  document.querySelectorAll("[data-tab]").forEach((button) => button.classList.toggle("active", button.dataset.tab === name));
+  document.querySelectorAll("[data-tab-panel]").forEach((panel) => {
+    const active = panel.dataset.tabPanel === name;
+    panel.hidden = !active;
+    panel.classList.toggle("active", active);
+  });
 }
 function render(state) {
   appState = state;
@@ -172,6 +182,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   await initializeDragDrop();
   await listen("state-changed", ({ payload }) => render(payload));
   await listen("incoming-transfer", ({ payload }) => toast(`${payload.route} · 收到：${payload.title}`));
+  document.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => switchTab(button.dataset.tab)));
   $("#draft-text").addEventListener("input", renderDraft);
   $("#draft-text").addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !$("#send-button").disabled) {
@@ -205,6 +216,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     document.querySelectorAll("[data-activity-filter]").forEach((candidate) => candidate.classList.toggle("active", candidate === button));
     renderActivity();
   }));
+  $("#activity-list").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-open-activity]");
+    if (!button) return;
+    const item = (appState.activity || []).find((candidate) => candidate.id === button.dataset.openActivity);
+    if (item?.path) await call("open_path", { path: item.path });
+  });
   $("#activity-search").addEventListener("input", (event) => { activitySearch = event.target.value; renderActivity(); });
   $("#clear-activity-button").addEventListener("click", async () => {
     if (!confirm("清空这台电脑上的传送动态？这不会删除中转站内容或已接收文件。")) return;

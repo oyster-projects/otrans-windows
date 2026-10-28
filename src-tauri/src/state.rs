@@ -147,6 +147,16 @@ impl StateStore {
         message: impl Into<String>,
         route: Option<&str>,
     ) {
+        self.add_activity_with_details(kind, message, route, None);
+    }
+
+    pub fn add_activity_with_details(
+        &mut self,
+        kind: &str,
+        message: impl Into<String>,
+        route: Option<&str>,
+        path: Option<String>,
+    ) {
         self.state.activity.insert(
             0,
             Activity {
@@ -155,6 +165,7 @@ impl StateStore {
                 message: message.into(),
                 at: Utc::now().to_rfc3339(),
                 route: route.map(str::to_owned),
+                path,
             },
         );
         self.state.activity.truncate(100);

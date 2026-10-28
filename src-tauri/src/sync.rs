@@ -665,7 +665,12 @@ impl AppRuntime {
                 }
                 _ => format!("收到：{title}"),
             };
-            store.add_activity_with_route("received", message, Some(route));
+            store.add_activity_with_details(
+                "received",
+                message,
+                Some(route),
+                Some(folder.to_string_lossy().into_owned()),
+            );
             let route_label = match route {
                 "lan" => "局域网直传",
                 "mixed" => "局域网直传 + NAS",
@@ -677,7 +682,8 @@ impl AppRuntime {
                 .notification()
                 .builder()
                 .title("OTrans 收到新内容")
-                .body(&notification_body)
+                .body(format!("{notification_body}\n点击打开本次传送文件夹"))
+                .extra("folderPath", folder.to_string_lossy().into_owned())
                 .show()
             {
                 store.add_activity("error", format!("Windows 通知发送失败：{error}"));
